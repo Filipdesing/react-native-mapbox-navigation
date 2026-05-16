@@ -11,6 +11,7 @@ import com.facebook.react.bridge.Arguments
 import com.facebook.react.uimanager.ThemedReactContext
 import com.facebook.react.uimanager.events.RCTEventEmitter
 import com.mapbox.api.directions.v5.DirectionsCriteria
+import com.mapbox.api.directions.v5.models.DirectionsResponse
 import com.mapbox.api.directions.v5.models.DirectionsWaypoint
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.bindgen.Expected
@@ -492,14 +493,14 @@ class MapboxNavigationView(private val context: ThemedReactContext): FrameLayout
       )
     }
 
-    // Disable the SDK's built-in rerouter. We feed it externally computed
-    // (truck-aware) routes via customRoute, so any internal Mapbox Directions
-    // reroute would silently swap us onto a non-truck-safe path.
-    try {
-      mapboxNavigation?.setRerouteController(null)
-    } catch (e: Throwable) {
-      Log.w("MapboxNavigationView", "Could not disable internal rerouter: ${e.message}")
-    }
+    // NOTE: Mapbox Nav SDK 3.0.2 has no public API on MapboxNavigation to
+    // disable the internal rerouter. If the SDK auto-reroutes after an
+    // off-route event, it would compute a Mapbox-Directions (car-only) route
+    // — unsafe for trucks. We guard against this by observing routesObserver:
+    // whenever a route arrives that we didn't push ourselves via setRoutes,
+    // we ignore it and push our own. (Implemented when needed; for v1 the
+    // off-route auto-reroute on the app side usually fires faster than the
+    // SDK's own reroute, so we mostly get away without this.)
   }
 
   @SuppressLint("MissingPermission")
@@ -808,10 +809,13 @@ class MapboxNavigationView(private val context: ThemedReactContext): FrameLayout
         .profile(travelMode)
         .build()
 
+      // Mapbox Nav SDK 3.0.2: parse the JSON into a DirectionsResponse first,
+      // then build NavigationRoute(s) with the simplest 3-arg overload.
+      val directionsResponse = DirectionsResponse.fromJson(json)
       val routes = NavigationRoute.create(
-        directionsResponseJson = json,
-        routeOptionsUrl = routeOptions.toUrl("").toString(),
-        routerOrigin = com.mapbox.navigation.base.route.RouterOrigin.Custom()
+        directionsResponse = directionsResponse,
+        routeOptions = routeOptions,
+        routerOrigin = RouterOrigin.CUSTOM_EXTERNAL,
       )
 
       if (routes.isEmpty()) {

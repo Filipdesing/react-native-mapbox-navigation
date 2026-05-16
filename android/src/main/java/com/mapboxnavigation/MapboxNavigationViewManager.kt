@@ -60,7 +60,7 @@ class MapboxNavigationViewManager(private var reactContext: ReactApplicationCont
   }
 
   @ReactProp(name = "distanceUnit")
-  override fun setDirectionUnit(view: MapboxNavigationView?, value: String?) {
+  override fun setDistanceUnit(view: MapboxNavigationView?, value: String?) {
     if (value != null)  {
       view?.setDirectionUnit(value)
     }
@@ -93,10 +93,32 @@ class MapboxNavigationViewManager(private var reactContext: ReactApplicationCont
   }
 
   @ReactProp(name = "language")
-  override fun setLocal(view: MapboxNavigationView?, language: String?) {
+  override fun setLanguage(view: MapboxNavigationView?, language: String?) {
     if (language !== null) {
       view?.setLocal(language)
     }
+  }
+
+  // iOS-only props — codegen requires Kotlin overrides on Android even though
+  // these features aren't implemented in the Android view. Safe no-ops.
+  @ReactProp(name = "separateLegs")
+  override fun setSeparateLegs(view: MapboxNavigationView?, value: Boolean) {
+    // not used directly — waypoint-level `separatesLegs` is handled in setWaypoints
+  }
+
+  @ReactProp(name = "shouldSimulateRoute")
+  override fun setShouldSimulateRoute(view: MapboxNavigationView?, value: Boolean) {
+    // iOS only (Android: planned for next release per upstream README)
+  }
+
+  @ReactProp(name = "showsEndOfRouteFeedback")
+  override fun setShowsEndOfRouteFeedback(view: MapboxNavigationView?, value: Boolean) {
+    // iOS only
+  }
+
+  @ReactProp(name = "hideStatusView")
+  override fun setHideStatusView(view: MapboxNavigationView?, value: Boolean) {
+    // iOS only
   }
 
   @ReactProp(name = "showCancelButton")
