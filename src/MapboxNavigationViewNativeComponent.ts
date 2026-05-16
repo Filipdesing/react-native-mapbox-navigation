@@ -24,6 +24,14 @@ interface NativeProps extends ViewProps {
   showsEndOfRouteFeedback?: boolean;
   hideStatusView?: boolean;
   travelMode?: string;
+  /**
+   * JSON string of a Mapbox Directions API v5 response. When provided, the SDK
+   * skips its own Directions request and navigates the supplied route. Required
+   * for truck routing — feed a HERE-computed route converted to Mapbox format.
+   * The SDK's internal rerouter is disabled when this prop is set; the app must
+   * compute reroutes itself and call back with an updated customRoute.
+   */
+  customRoute?: string;
 }
 
 export default codegenNativeComponent<NativeProps>(

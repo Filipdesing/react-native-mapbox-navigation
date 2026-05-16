@@ -63,6 +63,28 @@ public class MapboxNavigationView: UIView, NavigationViewControllerDelegate {
     @objc var language: NSString = "us"
     @objc var destinationTitle: NSString = "Destination"
     @objc var travelMode: NSString = "driving-traffic"
+    /// JSON string of a Mapbox Directions API v5 response. When set, the SDK
+    /// skips its own Directions request and navigates the supplied route.
+    /// Required for truck routing — pass a HERE-planned route converted to the
+    /// Mapbox Directions format. While this is set, the SDK's internal
+    /// rerouter is suppressed (see `shouldRerouteFrom`). Mid-trip reroutes
+    /// arrive as a new customRoute string — we tear down and re-embed.
+    @objc var customRoute: NSString? {
+        didSet {
+            if oldValue == customRoute { return }
+            if embedded {
+                // Brute-force swap: tear down + re-embed. Less smooth than
+                // navigationService.router.updateRoute(...), but reliable
+                // without an active iOS test rig. Candidate for polish.
+                navViewController?.willMove(toParent: nil)
+                navViewController?.view.removeFromSuperview()
+                navViewController?.removeFromParent()
+                navViewController = nil
+                embedded = false
+            }
+            setNeedsLayout()
+        }
+    }
 
     @objc var onLocationChange: RCTDirectEventBlock?
     @objc var onRouteProgressChange: RCTDirectEventBlock?
@@ -137,41 +159,71 @@ public class MapboxNavigationView: UIView, NavigationViewControllerDelegate {
         options.locale = Locale(identifier: locale)
         options.distanceMeasurementSystem =  distanceUnit == "imperial" ? .imperial : .metric
 
-        Directions.shared.calculateRoutes(options: options) { [weak self] result in
-            guard let strongSelf = self, let parentVC = strongSelf.parentViewController else {
+        // Branch: if the JS layer supplied a pre-computed route (truck-aware,
+        // built externally via HERE Routing), decode and use it directly.
+        // Otherwise fall through to Directions.shared.calculateRoutes.
+        if let json = customRoute as String?, !json.isEmpty {
+            do {
+                guard let data = json.data(using: .utf8) else {
+                    throw NSError(domain: "MapboxNav", code: 1, userInfo: [NSLocalizedDescriptionKey: "customRoute is not valid UTF-8"])
+                }
+                let decoder = JSONDecoder()
+                decoder.userInfo[.options] = options
+                let routeResponse = try decoder.decode(RouteResponse.self, from: data)
+                let indexed = IndexedRouteResponse(routeResponse: routeResponse, routeIndex: 0)
+                self.startNavigation(with: indexed)
+                return
+            } catch {
+                onError?(["message": "Failed to parse customRoute: \(error.localizedDescription)"])
+                embedding = false
                 return
             }
+        }
+
+        Directions.shared.calculateRoutes(options: options) { [weak self] result in
+            guard let strongSelf = self else { return }
 
             switch result {
             case .failure(let error):
                 strongSelf.onError!(["message": error.localizedDescription])
+                strongSelf.embedding = false
             case .success(let response):
-                strongSelf.indexedRouteResponse = response
-                let navigationOptions = NavigationOptions(simulationMode: strongSelf.shouldSimulateRoute ? .always : .never)
-                let vc = NavigationViewController(for: response, navigationOptions: navigationOptions)
-
-                vc.showsEndOfRouteFeedback = strongSelf.showsEndOfRouteFeedback
-                StatusView.appearance().isHidden = strongSelf.hideStatusView
-
-                NavigationSettings.shared.voiceMuted = strongSelf.mute
-                NavigationSettings.shared.distanceUnit = strongSelf.distanceUnit == "imperial" ? .mile : .kilometer
-
-                vc.delegate = strongSelf
-
-                parentVC.addChild(vc)
-                strongSelf.addSubview(vc.view)
-                vc.view.frame = strongSelf.bounds
-                vc.didMove(toParent: parentVC)
-                strongSelf.navViewController = vc
+                strongSelf.startNavigation(with: response)
             }
+        }
+    }
 
-            strongSelf.embedding = false
-            strongSelf.embedded = true
-            
-            // MARK: Start CarPlay Navigation
-            if let carPlayNavigation = UIApplication.shared.delegate as? MapboxCarPlayNavigationDelegate {
-                carPlayNavigation.startNavigation(with: strongSelf)
-            }
+    /// Spin up the NavigationViewController for a ready-to-go route response.
+    /// Used both by the standard Directions flow and by the customRoute path.
+    private func startNavigation(with response: IndexedRouteResponse) {
+        guard let parentVC = parentViewController else {
+            embedding = false
+            return
+        }
+
+        indexedRouteResponse = response
+        let navigationOptions = NavigationOptions(simulationMode: shouldSimulateRoute ? .always : .never)
+        let vc = NavigationViewController(for: response, navigationOptions: navigationOptions)
+
+        vc.showsEndOfRouteFeedback = showsEndOfRouteFeedback
+        StatusView.appearance().isHidden = hideStatusView
+
+        NavigationSettings.shared.voiceMuted = mute
+        NavigationSettings.shared.distanceUnit = distanceUnit == "imperial" ? .mile : .kilometer
+
+        vc.delegate = self
+
+        parentVC.addChild(vc)
+        addSubview(vc.view)
+        vc.view.frame = bounds
+        vc.didMove(toParent: parentVC)
+        navViewController = vc
+
+        embedding = false
+        embedded = true
+
+        if let carPlayNavigation = UIApplication.shared.delegate as? MapboxCarPlayNavigationDelegate {
+            carPlayNavigation.startNavigation(with: self)
         }
     }
 
@@ -204,5 +256,17 @@ public class MapboxNavigationView: UIView, NavigationViewControllerDelegate {
           "latitude": waypoint.coordinate.longitude,
         ])
         return true;
+    }
+
+    /// Suppress Mapbox's built-in rerouter whenever we're driving a custom
+    /// (externally-planned) route. Otherwise the SDK would silently fall back
+    /// to its car-only Directions API and could route a truck onto an unsafe
+    /// road. Reroutes are handled by the app: it asks the backend for a new
+    /// HERE truck-aware route and pushes a fresh customRoute string.
+    public func navigationViewController(_ navigationViewController: NavigationViewController, shouldRerouteFrom location: CLLocation) -> Bool {
+        if let json = customRoute as String?, !json.isEmpty {
+            return false
+        }
+        return true
     }
 }

@@ -96,6 +96,10 @@ class MapboxNavigationView(private val context: ThemedReactContext): FrameLayout
   private var distanceUnit: String = DirectionsCriteria.IMPERIAL
   private var locale = Locale.getDefault()
   private var travelMode: String = DirectionsCriteria.PROFILE_DRIVING
+  /** JSON of a Mapbox Directions API v5 response — bypass internal Directions call. */
+  private var customRouteJson: String? = null
+  /** True once initNavigation has run — controls whether setCustomRoute can hot-swap routes. */
+  private var navigationStarted: Boolean = false
 
   /**
    * Bindings to the example layout.
@@ -487,6 +491,15 @@ class MapboxNavigationView(private val context: ThemedReactContext): FrameLayout
           .build()
       )
     }
+
+    // Disable the SDK's built-in rerouter. We feed it externally computed
+    // (truck-aware) routes via customRoute, so any internal Mapbox Directions
+    // reroute would silently swap us onto a non-truck-safe path.
+    try {
+      mapboxNavigation?.setRerouteController(null)
+    } catch (e: Throwable) {
+      Log.w("MapboxNavigationView", "Could not disable internal rerouter: ${e.message}")
+    }
   }
 
   @SuppressLint("MissingPermission")
@@ -743,6 +756,16 @@ class MapboxNavigationView(private val context: ThemedReactContext): FrameLayout
     mapboxNavigation?.registerLocationObserver(locationObserver)
     mapboxNavigation?.registerVoiceInstructionsObserver(voiceInstructionsObserver)
 
+    navigationStarted = true
+
+    // Branch: if the JS layer supplied a pre-computed route (truck-aware,
+    // built externally via HERE Routing), use it directly. Otherwise fall
+    // back to letting Mapbox Directions compute a route.
+    if (!customRouteJson.isNullOrEmpty()) {
+      applyCustomRoute()
+      return
+    }
+
     // Create a list of coordinates that includes origin, destination
     val coordinatesList = mutableListOf<Point>()
     this.origin?.let { coordinatesList.add(it) }
@@ -750,6 +773,55 @@ class MapboxNavigationView(private val context: ThemedReactContext): FrameLayout
     this.destination?.let { coordinatesList.add(it) }
 
     findRoute(coordinatesList)
+  }
+
+  /**
+   * Parse a Mapbox Directions API v5 JSON response and start navigation along
+   * it. Used both at startup (when customRoute is set initially) and as a
+   * hot-swap when the app pushes a fresh route mid-trip (reroute scenario).
+   */
+  private fun applyCustomRoute() {
+    val json = customRouteJson ?: return
+    val originPoint = origin
+    val destinationPoint = destination
+    if (originPoint == null || destinationPoint == null) {
+      sendErrorToReact("customRoute requires startOrigin and destination to be set")
+      return
+    }
+
+    try {
+      // Minimal RouteOptions so the SDK has the request context it expects.
+      // The actual geometry/maneuvers come from the JSON we pass in.
+      val coords = mutableListOf<Point>()
+      coords.add(originPoint)
+      coords.addAll(waypoints)
+      coords.add(destinationPoint)
+
+      val routeOptions = RouteOptions.builder()
+        .applyDefaultNavigationOptions()
+        .applyLanguageAndVoiceUnitOptions(context)
+        .coordinatesList(coords)
+        .language(locale.language)
+        .steps(true)
+        .voiceInstructions(true)
+        .voiceUnits(distanceUnit)
+        .profile(travelMode)
+        .build()
+
+      val routes = NavigationRoute.create(
+        directionsResponseJson = json,
+        routeOptionsUrl = routeOptions.toUrl("").toString(),
+        routerOrigin = com.mapbox.navigation.base.route.RouterOrigin.Custom()
+      )
+
+      if (routes.isEmpty()) {
+        sendErrorToReact("customRoute parsed to zero routes")
+        return
+      }
+      setRouteAndStartNavigation(routes)
+    } catch (e: Throwable) {
+      sendErrorToReact("Failed to load customRoute: ${e.message}")
+    }
   }
 
   override fun onDetachedFromWindow() {
@@ -830,6 +902,23 @@ class MapboxNavigationView(private val context: ThemedReactContext): FrameLayout
         "driving" -> DirectionsCriteria.PROFILE_DRIVING
         "driving-traffic" -> DirectionsCriteria.PROFILE_DRIVING_TRAFFIC
         else -> DirectionsCriteria.PROFILE_DRIVING_TRAFFIC
+    }
+  }
+
+  /**
+   * Setter for the customRoute prop. Two phases:
+   *  - Before navigation has started: just store it; initNavigation/startRoute
+   *    will pick it up and call applyCustomRoute().
+   *  - After navigation has started (mid-trip reroute scenario): apply the
+   *    new route immediately. Mapbox setNavigationRoutes hot-swaps the route
+   *    without restarting the trip session.
+   */
+  fun setCustomRoute(json: String?) {
+    val normalized = if (json.isNullOrBlank()) null else json
+    val changed = normalized != this.customRouteJson
+    this.customRouteJson = normalized
+    if (changed && navigationStarted && normalized != null) {
+      applyCustomRoute()
     }
   }
 }

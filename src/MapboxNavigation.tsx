@@ -128,6 +128,7 @@ class MapboxNavigation extends React.Component<
             onCancelNavigation?.(event.nativeEvent)
           }
           travelMode={travelMode}
+          customRoute={rest.customRoute}
           {...rest}
         />
       </View>

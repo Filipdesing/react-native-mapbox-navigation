@@ -102,6 +102,19 @@ export interface MapboxNavigationProps {
    */
   shouldSimulateRoute?: boolean;
 
+  /**
+   * JSON string of a Mapbox Directions API v5 response. When set, the SDK
+   * navigates this exact route instead of asking Mapbox Directions to compute
+   * one — essential when you need an externally planned (e.g. truck-aware)
+   * route. The SDK's built-in rerouter is disabled while this is active; the
+   * app must produce a new customRoute string to switch routes mid-trip.
+   *
+   * `startOrigin` and `destination` are still required by codegen — pass the
+   * first and last coordinates of your custom route; they are ignored by the
+   * native side when customRoute is present but satisfy the prop typing.
+   */
+  customRoute?: string;
+
   onLocationChange?: (location: Location) => void;
   onRouteProgressChange?: (progress: RouteProgress) => void;
   onError?: (error: MapboxEvent) => void;

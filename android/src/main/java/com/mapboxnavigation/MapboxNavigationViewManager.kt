@@ -116,6 +116,11 @@ class MapboxNavigationViewManager(private var reactContext: ReactApplicationCont
     }
   }
 
+  @ReactProp(name = "customRoute")
+  override fun setCustomRoute(view: MapboxNavigationView?, value: String?) {
+    view?.setCustomRoute(value)
+  }
+
   companion object {
     const val NAME = "MapboxNavigationView"
   }
